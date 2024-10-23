@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const app = express();
+const jwt = require("jsonwebtoken")
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
 
 // middle weres
@@ -30,26 +31,88 @@ async function run() {
     const menuCollection = client.db("bistroProjectDB").collection("menu");
     const reviewsCollection = client.db("bistroProjectDB").collection("reviews");
     const cartsCollection = client.db("bistroProjectDB").collection("carts");
-   
-    app.post("/users" , async (req, res) => {
-      const userInfo = req.body;
-      const result = await usersCollection.insertOne(userInfo);
+
+    // jwt related api 
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "1hr" })
+      res.send({ token })
+    })
+    // middlewere
+    const verifyToken = (req, res, next) => {
+      console.log("inside Verify Token", req.headers.authorization);
+      if (!req.headers.authorization) {
+        return res.status(401).send({ message: "unauthorized access" })
+      }
+      const token = req.headers.authorization.split(' ')[1]
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+          return res.status(401).send({ message: "unauthorized access" })
+        }
+        req.headers.authorization;
+        next()
+      })
+    }
+    // user related api 
+    app.get("/users", verifyToken, async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result)
+    })
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const query = { email: user?.email };
+      const exitsInUser = await usersCollection.findOne(query);
+      if (exitsInUser) {
+        return res.send({ message: "user already exits", insertedId: null })
+      }
+      const result = await usersCollection.insertOne(user);
+      res.send(result)
+    })
+
+    app.delete("/users/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await usersCollection.deleteOne(query);
+      res.send(result)
+    })
+    app.patch("/users/admin/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          role: "admin"
+        }
+      }
+      const result = await usersCollection.updateOne(filter, updateDoc);
       res.send(result)
     })
     // menu api
-    app.get("/menu" , async (req, res) => {
-       const result = await menuCollection.find().toArray();
-       res.send(result)
+    app.get("/menu", async (req, res) => {
+      const result = await menuCollection.find().toArray();
+      res.send(result)
     })
-    app.get("/reviews" , async (req, res) => {
-       const result = await reviewsCollection.find().toArray();
-       res.send(result)
+    app.get("/reviews", async (req, res) => {
+      const result = await reviewsCollection.find().toArray();
+      res.send(result)
     })
-
-    app.post("/carts" , async (req, res) => {
+    /// cart collection 
+    app.get("/carts", async (req, res) => {
+      const email = req.query.email;
+      const query = { email: email }
+      const result = await cartsCollection.find(query).toArray();
+      res.send(result)
+    })
+    app.post("/carts", async (req, res) => {
       const cartItem = req.body;
       const result = await cartsCollection.insertOne(cartItem);
-      res.send(result);      
+      console.log("result found", result);
+      res.send(result);
+    })
+    app.delete("/carts/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const result = await cartsCollection.deleteOne(query);
+      res.send(result)
     })
 
     // Send a ping to confirm a successful connection
@@ -62,9 +125,9 @@ async function run() {
 }
 run().catch(console.dir);
 
-app.get("/" , (req, res) => {
-    res.send("bistro server is running")
+app.get("/", (req, res) => {
+  res.send("bistro server is running")
 })
-app.listen(port , () => {
-  console.log( `signel crud  sevber is running port ${port}` )
+app.listen(port, () => {
+  console.log(`signel crud  sevber is running port ${port}`)
 })
