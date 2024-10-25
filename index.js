@@ -4,6 +4,7 @@ const app = express();
 const jwt = require("jsonwebtoken")
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const stripe = require("stripe")(process.env.VITE_STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
 
 // middle weres
@@ -31,6 +32,7 @@ async function run() {
     const menuCollection = client.db("bistroProjectDB").collection("menu");
     const reviewsCollection = client.db("bistroProjectDB").collection("reviews");
     const cartsCollection = client.db("bistroProjectDB").collection("carts");
+    const paymentsCollection = client.db("bistroProjectDB").collection("payments");
 
     // jwt related api 
     app.post("/jwt", async (req, res) => {
@@ -54,25 +56,25 @@ async function run() {
       })
     }
     // Verify Admin 
-    const verifyAdmin = async (req, res , next) => {
-       const email  = req.decoded.email;
-       const query  = { email : email };
-       const user = await usersCollection.findOne(query);
-       const isAdmin = user?.role === "admin";
-       if(!isAdmin){
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email: email };
+      const user = await usersCollection.findOne(query);
+      const isAdmin = user?.role === "admin";
+      if (!isAdmin) {
         return res.status(403).send({ message: "forbidden access" })
-            
-       }
-       next()
+
+      }
+      next()
     }
     // user related api 
-    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+    app.get("/users", verifyToken, async (req, res) => {
       const result = await usersCollection.find().toArray();
       res.send(result)
     });
 
     // user admin api 
-    app.get("/users/admin/:email", verifyToken, async (req, res) => {
+    app.get("/users/admin/:email", verifyToken, verifyAdmin, async (req, res) => {
       const email = req.params.email;
       if (email !== req.decoded.email) {
         return res.status(403).send({ message: "forbidden access" })
@@ -83,11 +85,11 @@ async function run() {
       if (user) {
         admin = user?.role === "admin"
       }
-      res.send({admin})
-      
+      res.send({ admin })
+
     })
 
-    app.post("/users", async (req, res) => {
+    app.post("/users",verifyToken, verifyAdmin, async (req, res) => {
       const user = req.body;
       const query = { email: user?.email };
       const exitsInUser = await usersCollection.findOne(query);
@@ -98,13 +100,13 @@ async function run() {
       res.send(result)
     })
 
-    app.delete("/users/:id", async (req, res) => {
+    app.delete("/users/:id",verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await usersCollection.deleteOne(query);
       res.send(result)
     })
-    app.patch("/users/admin/:id", async (req, res) => {
+    app.patch("/users/admin/:id", verifyToken, verifyAdmin,async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
@@ -118,6 +120,40 @@ async function run() {
     // menu api
     app.get("/menu", async (req, res) => {
       const result = await menuCollection.find().toArray();
+      res.send(result)
+    })
+    app.get("/menu/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const result = await menuCollection.findOne(query);
+      res.send(result)
+    })
+    app.post("/menu", async (req, res) => {
+      const menuItem = req.body;
+      const result = await menuCollection.insertOne(menuItem);
+      res.send(result)
+    })
+
+    app.patch("/menu/:id", async (req, res) => {
+      const item = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) }
+      const updateDoc = {
+        $set: {
+          name: item.name,
+          category: item.category,
+          price: item.price,
+          recipe: item.recipe,
+          image: item.image
+        }
+      }
+      const result = await menuCollection.updateOne(filter, updateDoc)
+      res.send(result);
+    })
+    app.delete("/menu/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const result = await menuCollection.deleteOne(query);
       res.send(result)
     })
     app.get("/reviews", async (req, res) => {
@@ -143,7 +179,49 @@ async function run() {
       const result = await cartsCollection.deleteOne(query);
       res.send(result)
     })
-
+    app.post('/create-payment-intent', async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      console.log(amount, "payment intent");
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ['card']
+      });
+      res.send({
+        clientSecret: paymentIntent.client_secret
+      })
+    })
+    // payment stripe related api
+    app.get("/payments/:email", async (req, res) => {
+      const query = { email: req.params.email }
+      // if (req.params.email !== req.decoded.email) {
+      //   return res.status(403).send({ message: "forbidden access" })
+      // }
+      const result = await paymentsCollection.find(query).toArray()
+      res.send(result)
+    })
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+  
+      try {
+          const paymentResult = await paymentsCollection.insertOne(payment);
+  
+          // Delete each item from the cart
+          const query = {
+              _id: {
+                  $in: payment.cardId.map(id => new ObjectId(id))
+              }
+          };
+  
+          const deletedResult = await cartsCollection.deleteMany(query);
+  
+          res.send({ paymentResult, deletedResult });
+      } catch (error) {
+          console.error("Error processing payment:", error);
+          res.status(500).send({ error: "An error occurred while processing the payment." });
+      }
+  });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
