@@ -5,6 +5,10 @@ const jwt = require("jsonwebtoken")
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require("stripe")(process.env.VITE_STRIPE_SECRET_KEY);
+const formData = require('form-data');
+const Mailgun = require('mailgun.js');
+const mailgun = new Mailgun(formData);
+const mg = mailgun.client({ username: 'api', key: process.env.MAILGUN_API_KEY || 'key-yourkeyhere' });
 const port = process.env.PORT || 5000;
 
 // middle weres
@@ -89,7 +93,7 @@ async function run() {
 
     })
 
-    app.post("/users",verifyToken, verifyAdmin, async (req, res) => {
+    app.post("/users", verifyToken, verifyAdmin, async (req, res) => {
       const user = req.body;
       const query = { email: user?.email };
       const exitsInUser = await usersCollection.findOne(query);
@@ -100,13 +104,13 @@ async function run() {
       res.send(result)
     })
 
-    app.delete("/users/:id",verifyToken, verifyAdmin, async (req, res) => {
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await usersCollection.deleteOne(query);
       res.send(result)
     })
-    app.patch("/users/admin/:id", verifyToken, verifyAdmin,async (req, res) => {
+    app.patch("/users/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
@@ -203,25 +207,39 @@ async function run() {
     })
     app.post("/payments", async (req, res) => {
       const payment = req.body;
-  
+
       try {
-          const paymentResult = await paymentsCollection.insertOne(payment);
-  
-          // Delete each item from the cart
-          const query = {
-              _id: {
-                  $in: payment.cardId.map(id => new ObjectId(id))
-              }
-          };
-  
-          const deletedResult = await cartsCollection.deleteMany(query);
-  
-          res.send({ paymentResult, deletedResult });
+        const paymentResult = await paymentsCollection.insertOne(payment);
+
+        // Delete each item from the cart
+        const query = {
+          _id: {
+            $in: payment.cardId.map(id => new ObjectId(id))
+          }
+        };
+
+        const deletedResult = await cartsCollection.deleteMany(query);
+
+        mg.messages.create(process.env.MAIL_SENDING_DOMAIN, {
+          from: "Mailgun Sandbox <postmastar@sandbox6aab7fc278744968b208d3b8fb989e6c.mailgun.org>",
+          to: ["infanjiounrahman20606@gmail.com"],
+          subject: "Bistro Boss Order Confirmation",
+          text: "Testing some Mailgun awesomness!",
+          html: `<div>
+               <h1>Thank You for your order</h1>
+               <h1>Your Transaction Id : <strong>${payment.transactionId}</strong></h1>
+          </div>`
+        })
+          .then(msg => console.log(msg)) // logs response data
+          .catch(err => console.error(err)); // logs any error
+
+
+        res.send({ paymentResult, deletedResult });
       } catch (error) {
-          console.error("Error processing payment:", error);
-          res.status(500).send({ error: "An error occurred while processing the payment." });
+        console.error("Error processing payment:", error);
+        res.status(500).send({ error: "An error occurred while processing the payment." });
       }
-  });
+    });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
